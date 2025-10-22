@@ -1,0 +1,5 @@
+{
+  "name": "Anonymous Truth Card Game",
+  "description": "A web app for social gatherings where users join a room, anonymously submit 'truth' questions, and draw from a shared pool to play.",
+  "requestFramePermissions": []
+}
