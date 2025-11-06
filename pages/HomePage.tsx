@@ -1,4 +1,3 @@
-
 import React, { useState, useContext } from 'react';
 import Button from '../components/Button';
 import Card from '../components/Card';
@@ -27,13 +26,15 @@ const HomePage: React.FC = () => {
   const handleJoinRoom = async (roomId: string) => {
     setIsLoading(true);
     try {
-      const room = await gameService.joinRoom(roomId);
-      if (room) {
+      // First, check if the room exists
+      const roomExists = await gameService.getRoom(roomId);
+      if (roomExists) {
+        const room = await gameService.joinRoom(roomId);
         localStorage.setItem('truth-game-room', JSON.stringify({ roomId }));
-        dispatch({ type: 'JOIN_ROOM', payload: room });
+        dispatch({ type: 'JOIN_ROOM', payload: room! });
         setIsModalOpen(false);
       } else {
-        alert("Room not found!");
+        alert("Room not found! Please check the ID and try again.");
       }
     } catch (error) {
       console.error("Failed to join room", error);
