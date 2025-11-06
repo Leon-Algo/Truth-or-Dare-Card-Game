@@ -8,20 +8,38 @@ import { GameContext, gameService } from '../context/GameContext';
 const HomePage: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const { dispatch } = useContext(GameContext);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleCreateRoom = () => {
-    const newRoom = gameService.createRoom();
-    dispatch({ type: 'CREATE_ROOM', payload: { roomId: newRoom.roomId!, hostId: newRoom.hostId! } });
+  const handleCreateRoom = async () => {
+    setIsLoading(true);
+    try {
+      const newRoom = await gameService.createRoom();
+      localStorage.setItem('truth-game-room', JSON.stringify({ roomId: newRoom.roomId, clientId: newRoom.hostId }));
+      dispatch({ type: 'CREATE_ROOM', payload: { roomId: newRoom.roomId!, hostId: newRoom.hostId! } });
+    } catch (error) {
+      console.error("Failed to create room", error);
+      alert("Could not create a room. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
   };
   
-  const handleJoinRoom = (roomId: string) => {
-    const room = gameService.joinRoom(roomId);
-    if (room) {
-      dispatch({ type: 'JOIN_ROOM', payload: room });
-      setIsModalOpen(false);
-    } else {
-      // In a real app, the modal would show this error.
-      alert("Room not found!");
+  const handleJoinRoom = async (roomId: string) => {
+    setIsLoading(true);
+    try {
+      const room = await gameService.joinRoom(roomId);
+      if (room) {
+        localStorage.setItem('truth-game-room', JSON.stringify({ roomId }));
+        dispatch({ type: 'JOIN_ROOM', payload: room });
+        setIsModalOpen(false);
+      } else {
+        alert("Room not found!");
+      }
+    } catch (error) {
+      console.error("Failed to join room", error);
+      alert("An error occurred while joining the room.");
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -31,8 +49,10 @@ const HomePage: React.FC = () => {
       <p className="text-secondary mb-10">匿名 & 刺激的线下社交游戏</p>
       
       <div className="space-y-4">
-        <Button onClick={handleCreateRoom}>创建真心话房间</Button>
-        <Button variant="link" onClick={() => setIsModalOpen(true)}>
+        <Button onClick={handleCreateRoom} disabled={isLoading}>
+          {isLoading ? '创建中...' : '创建真心话房间'}
+        </Button>
+        <Button variant="link" onClick={() => setIsModalOpen(true)} disabled={isLoading}>
           或输入房间号加入
         </Button>
       </div>

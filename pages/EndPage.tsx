@@ -8,12 +8,14 @@ import { PartyPopper } from 'lucide-react';
 const EndPage: React.FC = () => {
   const { gameState, dispatch } = useContext(GameContext);
 
-  const handleReturnHome = () => {
-    gameService.leaveGame(gameState.roomId!);
+  const handleReturnHome = async () => {
+    if (gameState.roomId) {
+      await gameService.leaveGame(gameState.roomId);
+    }
     dispatch({ type: 'LEAVE_GAME' });
   };
   
-  // "再来一局" would be more complex, requiring resetting the room state.
+  // "再来一局" would be more complex, requiring resetting the room state on the backend.
   // For simplicity, we just send the user back to the home screen.
 
   return (

@@ -1,6 +1,6 @@
 
 import React, { useState, useContext } from 'react';
-import { GameContext, gameService, broadcastState } from '../context/GameContext';
+import { GameContext, gameService } from '../context/GameContext';
 import Button from '../components/Button';
 import Card from '../components/Card';
 import { Users, Clipboard, Check } from 'lucide-react';
@@ -9,21 +9,31 @@ const LobbyPage: React.FC = () => {
   const { gameState, dispatch } = useContext(GameContext);
   const [question, setQuestion] = useState('');
   const [isCopied, setIsCopied] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const canStart = gameState.playerCount >= 2 && gameState.questions.length >= 3;
 
-  const handleSubmitQuestion = () => {
+  const handleSubmitQuestion = async () => {
     if (question.trim()) {
+      setIsSubmitting(true);
+      // Optimistic UI update
       dispatch({ type: 'SUBMIT_QUESTION', payload: question.trim() });
-      gameService.submitQuestion(gameState.roomId!, question.trim());
-      setQuestion('');
+      try {
+        await gameService.submitQuestion(gameState.roomId!, question.trim());
+        setQuestion('');
+      } catch (error) {
+        console.error("Failed to submit question", error);
+        alert("Could not submit your question. Please try again.");
+        // Here you might want to roll back the optimistic update
+      } finally {
+        setIsSubmitting(false);
+      }
     }
   };
 
-  const handleStartGame = () => {
+  const handleStartGame = async () => {
     if (canStart) {
-      gameService.startGame(gameState.roomId!);
-      broadcastState(gameState.roomId!); // Ensure everyone starts
+      await gameService.startGame(gameState.roomId!);
     }
   };
 
@@ -59,8 +69,8 @@ const LobbyPage: React.FC = () => {
         placeholder="输入一个“真心话”问题..."
         className="w-full p-4 bg-gray-100 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent mb-4 h-28 resize-none"
       />
-      <Button onClick={handleSubmitQuestion} disabled={!question.trim()}>
-        提交问题 ({gameState.questions.length})
+      <Button onClick={handleSubmitQuestion} disabled={!question.trim() || isSubmitting}>
+        {isSubmitting ? '提交中...' : `提交问题 (${gameState.questions.length})`}
       </Button>
       
       <div className="my-6 border-t border-medium"></div>

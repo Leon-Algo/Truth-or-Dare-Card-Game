@@ -6,12 +6,18 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 const QuestionCard: React.FC<{ question: string | null; onDraw: () => void; hasQuestions: boolean }> = ({ question, onDraw, hasQuestions }) => {
     const [isFlipped, setIsFlipped] = useState(false);
+    const [isDrawing, setIsDrawing] = useState(false);
 
-    const handleCardClick = () => {
-        if (!hasQuestions || isFlipped) return;
-        onDraw();
+    const handleCardClick = async () => {
+        if (!hasQuestions || isFlipped || isDrawing) return;
+        setIsDrawing(true);
         setIsFlipped(true);
-        setTimeout(() => setIsFlipped(false), 500); // Reset for next draw
+        await onDraw();
+        // The card resets for the next player after a delay
+        setTimeout(() => {
+            setIsFlipped(false);
+            setIsDrawing(false);
+        }, 2000);
     };
     
     const cardVariants = {
@@ -30,9 +36,9 @@ const QuestionCard: React.FC<{ question: string | null; onDraw: () => void; hasQ
                 style={{ transformStyle: 'preserve-3d' }}
             >
                 {/* Card Back */}
-                <div className="absolute w-full h-full bg-brand-primary rounded-2xl shadow-lg flex items-center justify-center backface-hidden">
-                    <h2 className="text-2xl font-bold text-white">
-                      {hasQuestions ? '点击抽题' : '没有更多问题了'}
+                <div className="absolute w-full h-full bg-brand-primary rounded-2xl shadow-lg flex items-center justify-center backface-hidden p-4">
+                    <h2 className="text-2xl font-bold text-white text-center">
+                      {hasQuestions ? (isDrawing ? '...' : '点击抽题') : '没有更多问题了'}
                     </h2>
                 </div>
 
@@ -49,15 +55,17 @@ const QuestionCard: React.FC<{ question: string | null; onDraw: () => void; hasQ
 const GamePage: React.FC = () => {
     const { gameState } = useContext(GameContext);
 
-    const handleDraw = () => {
-        gameService.drawQuestion(gameState.roomId!);
+    const handleDraw = async () => {
+        await gameService.drawQuestion(gameState.roomId!);
     };
     
+    const totalQuestions = gameState.questions.length + gameState.usedQuestions.length;
+
     return (
         <div className="w-full">
             <div className="text-center mb-6">
                 <p className="text-secondary">问题池剩余</p>
-                <p className="text-2xl font-bold">{gameState.questions.length} / {gameState.questions.length + gameState.usedQuestions.length}</p>
+                <p className="text-2xl font-bold">{gameState.questions.length} / {totalQuestions}</p>
             </div>
             
             <AnimatePresence>
