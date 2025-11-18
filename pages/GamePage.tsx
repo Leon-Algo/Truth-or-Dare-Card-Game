@@ -1,6 +1,5 @@
-
 import React, { useState, useContext } from 'react';
-import { GameContext, gameService } from '../context/GameContext';
+import { GameContext } from '../context/GameContext';
 import Card from '../components/Card';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -12,8 +11,8 @@ const QuestionCard: React.FC<{ question: string | null; onDraw: () => void; hasQ
         if (!hasQuestions || isFlipped || isDrawing) return;
         setIsDrawing(true);
         setIsFlipped(true);
-        await onDraw();
-        // The card resets for the next player after a delay
+        onDraw(); // No longer async, just sends the action
+        // The card resets for the next player after a delay, driven by state update
         setTimeout(() => {
             setIsFlipped(false);
             setIsDrawing(false);
@@ -38,7 +37,7 @@ const QuestionCard: React.FC<{ question: string | null; onDraw: () => void; hasQ
                 {/* Card Back */}
                 <div className="absolute w-full h-full bg-brand-primary rounded-2xl shadow-lg flex items-center justify-center backface-hidden p-4">
                     <h2 className="text-2xl font-bold text-white text-center">
-                      {hasQuestions ? (isDrawing ? '...' : '点击抽题') : '没有更多问题了'}
+                      {hasQuestions ? (isDrawing ? '...' : '点击抽卡') : '没有更多问题了'}
                     </h2>
                 </div>
 
@@ -53,10 +52,10 @@ const QuestionCard: React.FC<{ question: string | null; onDraw: () => void; hasQ
 
 
 const GamePage: React.FC = () => {
-    const { gameState } = useContext(GameContext);
+    const { gameState, sendPlayerAction } = useContext(GameContext);
 
-    const handleDraw = async () => {
-        await gameService.drawQuestion(gameState.roomId!);
+    const handleDraw = () => {
+        sendPlayerAction({ type: 'DRAW_QUESTION' });
     };
     
     const totalQuestions = gameState.questions.length + gameState.usedQuestions.length;
@@ -64,7 +63,7 @@ const GamePage: React.FC = () => {
     return (
         <div className="w-full">
             <div className="text-center mb-6">
-                <p className="text-secondary">问题池剩余</p>
+                <p className="text-secondary">剩余问题</p>
                 <p className="text-2xl font-bold">{gameState.questions.length} / {totalQuestions}</p>
             </div>
             

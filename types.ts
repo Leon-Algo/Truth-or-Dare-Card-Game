@@ -1,4 +1,3 @@
-
 export type GameStatus = 'waiting' | 'playing' | 'ended';
 
 export interface Room {
@@ -14,6 +13,7 @@ export interface Room {
 export type GameAction =
   | { type: 'CREATE_ROOM'; payload: { roomId: string; hostId: string } }
   | { type: 'JOIN_ROOM'; payload: Room }
+  | { type: 'SET_CLIENT_ID'; payload: { clientId: string } }
   | { type: 'SUBMIT_QUESTION'; payload: string }
   | { type: 'UPDATE_STATE'; payload: Partial<Room> }
   | { type: 'START_GAME' }

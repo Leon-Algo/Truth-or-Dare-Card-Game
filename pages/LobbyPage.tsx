@@ -1,12 +1,11 @@
-
 import React, { useState, useContext } from 'react';
-import { GameContext, gameService } from '../context/GameContext';
+import { GameContext } from '../context/GameContext';
 import Button from '../components/Button';
 import Card from '../components/Card';
 import { Users, Clipboard, Check } from 'lucide-react';
 
 const LobbyPage: React.FC = () => {
-  const { gameState, dispatch } = useContext(GameContext);
+  const { gameState, isHost, sendPlayerAction, dispatch } = useContext(GameContext);
   const [question, setQuestion] = useState('');
   const [isCopied, setIsCopied] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -16,24 +15,17 @@ const LobbyPage: React.FC = () => {
   const handleSubmitQuestion = async () => {
     if (question.trim()) {
       setIsSubmitting(true);
-      // Optimistic UI update
+      // Optimistic UI update for immediate feedback
       dispatch({ type: 'SUBMIT_QUESTION', payload: question.trim() });
-      try {
-        await gameService.submitQuestion(gameState.roomId!, question.trim());
-        setQuestion('');
-      } catch (error) {
-        console.error("Failed to submit question", error);
-        alert("Could not submit your question. Please try again.");
-        // Here you might want to roll back the optimistic update
-      } finally {
-        setIsSubmitting(false);
-      }
+      sendPlayerAction({ type: 'SUBMIT_QUESTION', payload: question.trim() });
+      setQuestion('');
+      setIsSubmitting(false);
     }
   };
 
   const handleStartGame = async () => {
-    if (canStart) {
-      await gameService.startGame(gameState.roomId!);
+    if (canStart && isHost) {
+      sendPlayerAction({ type: 'START_GAME' });
     }
   };
 
@@ -75,8 +67,8 @@ const LobbyPage: React.FC = () => {
       
       <div className="my-6 border-t border-medium"></div>
 
-      <Button onClick={handleStartGame} disabled={!canStart}>
-        开始游戏
+      <Button onClick={handleStartGame} disabled={!canStart || !isHost}>
+        {isHost ? '开始游戏' : '等待房主开始'}
       </Button>
       {!canStart && <p className="text-xs text-secondary text-center mt-2">需要至少2位玩家和3个问题才能开始</p>}
     </Card>
