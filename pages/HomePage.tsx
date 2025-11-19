@@ -22,7 +22,11 @@ const HomePage: React.FC = () => {
     setIsLoading(true);
     try {
       const newRoom = await gameService.createRoom();
-      localStorage.setItem('truth-game-session', JSON.stringify({ roomId: newRoom.roomId, clientId: newRoom.hostId }));
+      try {
+        localStorage.setItem('truth-game-session', JSON.stringify({ roomId: newRoom.roomId, clientId: newRoom.hostId }));
+      } catch (e) {
+        console.error("localStorage is not available.", e);
+      }
       dispatch({ type: 'CREATE_ROOM', payload: { roomId: newRoom.roomId!, hostId: newRoom.hostId! } });
     } catch (error) {
       console.error("Failed to create room", error);
@@ -38,11 +42,19 @@ const HomePage: React.FC = () => {
       const roomExists = await gameService.getRoom(roomId);
       if (roomExists) {
         const room = await gameService.joinRoom(roomId);
-        const clientId = generateId(10);
-        localStorage.setItem('truth-game-session', JSON.stringify({ roomId, clientId }));
-        dispatch({ type: 'JOIN_ROOM', payload: room! });
-        dispatch({ type: 'SET_CLIENT_ID', payload: { clientId } });
-        setIsModalOpen(false);
+        if(room) {
+          const clientId = generateId(10);
+          try {
+            localStorage.setItem('truth-game-session', JSON.stringify({ roomId, clientId }));
+          } catch(e) {
+            console.error("localStorage is not available.", e);
+          }
+          dispatch({ type: 'JOIN_ROOM', payload: room! });
+          dispatch({ type: 'SET_CLIENT_ID', payload: { clientId } });
+          setIsModalOpen(false);
+        } else {
+           alert("Could not join the room. It might be full or has ended.");
+        }
       } else {
         alert("Room not found! Please check the ID and try again.");
       }

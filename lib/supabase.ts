@@ -1,3 +1,4 @@
+
 import { createClient } from '@supabase/supabase-js';
 
 // --- Supabase Setup ---
@@ -12,53 +13,156 @@ const supabaseUrl = 'https://pmwkjgxqydlxjctcqngy.supabase.co';
 // 4. Paste the key below, replacing 'YOUR_SUPABASE_ANON_KEY'.
 const supabaseAnonKey = 'YOUR_SUPABASE_ANON_KEY';
 
-// A check to prevent the app from crashing if the key is missing.
+// Check if the key is missing, but don't crash the app.
 if (!supabaseUrl || supabaseAnonKey === 'YOUR_SUPABASE_ANON_KEY') {
-  const rootEl = document.getElementById('root');
-  if (rootEl) {
-    rootEl.innerHTML = `
-      <div style="font-family: sans-serif; padding: 2rem; background-color: #fff3f3; border: 1px solid #ffcccc; border-radius: 8px; max-width: 600px; margin: 4rem auto; line-height: 1.6;">
-        <h1 style="color: #cc0000;">Configuration Error</h1>
-        <p>Your Supabase Anon Key is missing. Please follow these steps:</p>
-        <ol>
-          <li>Open the file: <code>lib/supabase.ts</code></li>
-          <li>Find the line: <code>const supabaseAnonKey = 'YOUR_SUPABASE_ANON_KEY';</code></li>
-          <li>Replace <code>'YOUR_SUPABASE_ANON_KEY'</code> with your actual Supabase "anon" public key from your project's API settings.</li>
-        </ol>
-      </div>
-    `;
-  }
-  // Throw an error to stop the rest of the script from executing.
-  throw new Error("Supabase anon key is not configured. Please check lib/supabase.ts");
+  console.warn("Supabase Anon Key is not configured in lib/supabase.ts. Real-time features will not work until this is fixed.");
 }
-
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 /*
--- 2. SQL to create your 'rooms' table in the Supabase SQL Editor:
--- Make sure to enable RLS (Row Level Security) on the table if it's not already.
+-- Run this SQL in your Supabase SQL Editor to set up the table and functions.
 
+-- 1. Create the rooms table (if you haven't already)
 CREATE TABLE rooms (
   room_id TEXT PRIMARY KEY,
   state JSONB NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
 
--- After creating the table, enable realtime updates on it
+-- 2. Enable real-time updates on the table
 ALTER PUBLICATION supabase_realtime ADD TABLE rooms;
 
--- Optional but recommended: Create policies for security
--- This allows anyone to read rooms, but you might want to lock this down further.
-CREATE POLICY "Public rooms are viewable by everyone."
-  ON rooms FOR SELECT
-  USING ( true );
+-- 3. Set up Row Level Security (RLS)
+ALTER TABLE rooms ENABLE ROW LEVEL SECURITY;
 
--- This allows anyone to create or update a room.
--- In a production app, you would want to add authorization rules.
-CREATE POLICY "Anyone can create and update rooms."
+-- 4. Create Policies (replace existing policies if you have them)
+-- This allows anyone to see, create, or update rooms.
+-- For a production app, you would want more restrictive policies.
+DROP POLICY IF EXISTS "Public access for rooms" ON rooms;
+CREATE POLICY "Public access for rooms"
   ON rooms FOR ALL
   USING ( true )
   WITH CHECK ( true );
+
+-- 5. Create the database functions for atomic operations (RPCs)
+-- This is the key to preventing race conditions.
+
+-- Function to join a room and increment player count
+CREATE OR REPLACE FUNCTION join_room(p_room_id TEXT)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  updated_state JSONB;
+BEGIN
+  UPDATE rooms
+  SET state = jsonb_set(state, '{playerCount}', (state->>'playerCount')::INT + 1)
+  WHERE room_id = p_room_id
+  RETURNING state INTO updated_state;
+  
+  RETURN updated_state;
+END;
+$$;
+
+-- Function to leave a room and decrement player count
+CREATE OR REPLACE FUNCTION leave_room(p_room_id TEXT)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  updated_state JSONB;
+BEGIN
+  UPDATE rooms
+  SET state = jsonb_set(state, '{playerCount}', GREATEST(0, (state->>'playerCount')::INT - 1))
+  WHERE room_id = p_room_id
+  RETURNING state INTO updated_state;
+  
+  RETURN updated_state;
+END;
+$$;
+
+-- Function to submit a question
+CREATE OR REPLACE FUNCTION submit_question(p_room_id TEXT, p_question TEXT)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  UPDATE rooms
+  SET state = jsonb_set(state, '{questions}', state->'questions' || to_jsonb(p_question))
+  WHERE room_id = p_room_id;
+END;
+$$;
+
+-- Function to start the game
+CREATE OR REPLACE FUNCTION start_game(p_room_id TEXT)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  UPDATE rooms
+  SET state = jsonb_set(state, '{status}', '"playing"')
+  WHERE room_id = p_room_id;
+END;
+$$;
+
+-- Function to draw a question (the most complex one)
+CREATE OR REPLACE FUNCTION draw_question(p_room_id TEXT)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  current_state JSONB;
+  questions_array JSONB;
+  question_to_draw JSONB;
+  question_index INT;
+BEGIN
+  -- Select the current state for the given room
+  SELECT state INTO current_state FROM rooms WHERE room_id = p_room_id;
+
+  -- Get the questions array
+  questions_array := current_state->'questions';
+
+  -- If there are questions to draw
+  IF jsonb_array_length(questions_array) > 0 THEN
+    -- Pick a random index
+    question_index := floor(random() * jsonb_array_length(questions_array));
+    
+    -- Get the question at that index
+    question_to_draw := questions_array->question_index;
+    
+    -- Remove the question from the 'questions' array
+    current_state := jsonb_set(
+      current_state,
+      '{questions}',
+      (SELECT jsonb_agg(elem) FROM jsonb_array_elements(questions_array) WITH ORDINALITY AS t(elem, idx) WHERE idx != question_index + 1)
+    );
+
+    -- Add the question to the 'usedQuestions' array
+    current_state := jsonb_set(
+      current_state,
+      '{usedQuestions}',
+      current_state->'usedQuestions' || question_to_draw
+    );
+
+    -- Set the 'currentQuestion'
+    current_state := jsonb_set(
+      current_state,
+      '{currentQuestion}',
+      question_to_draw
+    );
+  ELSE
+    -- If no questions are left, end the game
+    current_state := jsonb_set(
+      current_state,
+      '{status}',
+      '"ended"'
+    );
+  END IF;
+
+  -- Update the room with the new state
+  UPDATE rooms SET state = current_state WHERE room_id = p_room_id;
+END;
+$$;
 
 */

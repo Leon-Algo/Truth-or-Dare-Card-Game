@@ -1,4 +1,4 @@
-import React, { createContext, useReducer, useEffect, ReactNode, useRef } from 'react';
+import React, { createContext, useReducer, useEffect, ReactNode, useRef, useCallback } from 'react';
 import { Room, GameAction } from '../types';
 import { supabase } from '../lib/supabase';
 import { RealtimeChannel } from '@supabase/supabase-js';
@@ -81,7 +81,6 @@ const generateId = (length: number): string => {
     return result;
 }
 
-// These functions are now only called by the host
 export const gameService = {
     createRoom: async (): Promise<Room> => {
         let newRoomId = '';
@@ -110,43 +109,32 @@ export const gameService = {
         return data.state as Room;
     },
     joinRoom: async (roomId: string): Promise<Room | null> => {
-        const room = await gameService.getRoom(roomId);
-        if (!room) return null;
-        room.playerCount += 1;
-        const { error } = await supabase.from('rooms').update({ state: room }).eq('room_id', roomId);
+        const { data, error } = await supabase.rpc('join_room', { p_room_id: roomId });
         if (error) throw error;
-        return room;
+        return data as Room;
+    },
+    leaveRoom: async (roomId: string): Promise<void> => {
+        const { error } = await supabase.rpc('leave_room', { p_room_id: roomId });
+        if (error) console.error("Failed to leave room:", error);
     },
     submitQuestion: async (roomId: string, question: string): Promise<void> => {
-        const room = await gameService.getRoom(roomId);
-        if (room) {
-            room.questions.push(question);
-            await supabase.from('rooms').update({ state: room }).eq('room_id', roomId);
-        }
+        const { error } = await supabase.rpc('submit_question', { p_room_id: roomId, p_question: question });
+        if (error) throw error;
     },
     startGame: async (roomId: string): Promise<void> => {
-        const room = await gameService.getRoom(roomId);
-        if (room) {
-            room.status = 'playing';
-            await supabase.from('rooms').update({ state: room }).eq('room_id', roomId);
-        }
+        const { error } = await supabase.rpc('start_game', { p_room_id: roomId });
+        if (error) throw error;
     },
     drawQuestion: async (roomId: string): Promise<void> => {
-        const room = await gameService.getRoom(roomId);
-        if (room) {
-            if(room.questions.length > 0) {
-                const qIndex = Math.floor(Math.random() * room.questions.length);
-                const [drawnQuestion] = room.questions.splice(qIndex, 1);
-                room.currentQuestion = drawnQuestion;
-                room.usedQuestions.push(drawnQuestion);
-            } else {
-                room.status = 'ended';
-            }
-            await supabase.from('rooms').update({ state: room }).eq('room_id', roomId);
-        }
+        const { error } = await supabase.rpc('draw_question', { p_room_id: roomId });
+        if (error) throw error;
     },
     leaveGame: async (): Promise<void> => {
-      localStorage.removeItem('truth-game-session');
+      try {
+        localStorage.removeItem('truth-game-session');
+      } catch (e) {
+        console.error("Could not clear session from localStorage", e);
+      }
     }
 }
 
@@ -155,6 +143,17 @@ export const GameProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   const channelRef = useRef<RealtimeChannel | null>(null);
 
   const isHost = gameState.hostId !== null && gameState.clientId === gameState.hostId;
+
+  // Use refs to get the latest state in stable callbacks without re-triggering effects.
+  const gameStateRef = useRef(gameState);
+  useEffect(() => {
+    gameStateRef.current = gameState;
+  }, [gameState]);
+
+  const isHostRef = useRef(isHost);
+  useEffect(() => {
+    isHostRef.current = isHost;
+  }, [isHost]);
 
   // Rejoin session from localStorage
   useEffect(() => {
@@ -181,7 +180,26 @@ export const GameProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     rejoinSession();
   }, []);
 
-  // Manage Supabase real-time connection
+  const handlePlayerAction = useCallback(async ({ payload }: { payload: { type: string; payload?: any } }) => {
+    const currentIsHost = isHostRef.current;
+    const currentGameState = gameStateRef.current;
+
+    if (!currentIsHost || !currentGameState.roomId) return;
+    
+    switch (payload.type) {
+      case 'SUBMIT_QUESTION':
+        await gameService.submitQuestion(currentGameState.roomId, payload.payload);
+        break;
+      case 'START_GAME':
+        await gameService.startGame(currentGameState.roomId);
+        break;
+      case 'DRAW_QUESTION':
+        await gameService.drawQuestion(currentGameState.roomId);
+        break;
+    }
+  }, []); // Empty dependency array ensures this function reference is stable
+
+  // Effect 1: Manages the channel lifecycle based ONLY on roomId
   useEffect(() => {
     if (!gameState.roomId) {
       if (channelRef.current) {
@@ -191,80 +209,66 @@ export const GameProvider: React.FC<{children: ReactNode}> = ({ children }) => {
       return;
     }
 
-    // Join channel if it's new
-    if (!channelRef.current || channelRef.current.topic !== `room:${gameState.roomId}`) {
-        if (channelRef.current) {
-            supabase.removeChannel(channelRef.current);
-        }
-        const newChannel = supabase.channel(`room:${gameState.roomId}`);
-        channelRef.current = newChannel;
+    const channel = supabase.channel(`room:${gameState.roomId}`);
+    channelRef.current = channel;
 
-        // Everyone listens for state updates from the DB
-        newChannel.on(
-            'postgres_changes',
-            { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `room_id=eq.${gameState.roomId}` },
-            (payload) => {
-                dispatch({ type: 'UPDATE_STATE', payload: payload.new.state as Room });
+    // General listener for all players
+    channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'rooms', filter: `room_id=eq.${gameState.roomId}` },
+        (payload) => {
+            if (payload.eventType === 'UPDATE' && payload.new.state) {
+              dispatch({ type: 'UPDATE_STATE', payload: payload.new.state as Room });
             }
-        ).subscribe((status, err) => {
+        }
+    );
+    
+    if(channel.state !== 'joined') {
+        channel.subscribe((status, err) => {
             if (status === 'CHANNEL_ERROR') console.error('Real-time channel error:', err);
         });
     }
 
-    // Host also listens for actions broadcast by other players
-    if (isHost && channelRef.current) {
-        const playerActionListener = channelRef.current.on('broadcast', { event: 'player_action' }, ({ payload }) => {
-            switch (payload.type) {
-              case 'SUBMIT_QUESTION':
-                gameService.submitQuestion(gameState.roomId!, payload.payload);
-                break;
-              case 'START_GAME':
-                gameService.startGame(gameState.roomId!);
-                break;
-              case 'DRAW_QUESTION':
-                gameService.drawQuestion(gameState.roomId!);
-                break;
-            }
-        });
-        
-        // Cleanup listener when host status changes or component unmounts
+    return () => {
+        if (channelRef.current) {
+            supabase.removeChannel(channelRef.current);
+            channelRef.current = null;
+        }
+    };
+  }, [gameState.roomId]);
+
+  // Effect 2: Manages the host-specific broadcast listener based ONLY on isHost
+  useEffect(() => {
+    const channel = channelRef.current;
+    if (channel && isHost) {
+        // Add listener if user is host
+        channel.on('broadcast', { event: 'player_action' }, handlePlayerAction);
+
         return () => {
-            if (channelRef.current) {
-                channelRef.current.off('broadcast', { event: 'player_action' });
-            }
+            // Important: remove the specific listener on cleanup to prevent leaks
+            channel.off('broadcast', { event: 'player_action' });
         };
     }
-  }, [gameState.roomId, isHost]);
+  }, [isHost, handlePlayerAction]);
 
-  // Function for components to send actions
-  const sendPlayerAction = (action: { type: string; payload?: any }) => {
-    if (!gameState.roomId) return;
+  const sendPlayerAction = useCallback(async (action: { type: string; payload?: any }) => {
+    const currentIsHost = isHostRef.current;
+    const currentGameState = gameStateRef.current;
+
+    if (!currentGameState.roomId) return;
     
-    const handler = () => {
-        switch (action.type) {
-            case 'SUBMIT_QUESTION':
-                gameService.submitQuestion(gameState.roomId!, action.payload);
-                break;
-            case 'START_GAME':
-                gameService.startGame(gameState.roomId!);
-                break;
-            case 'DRAW_QUESTION':
-                gameService.drawQuestion(gameState.roomId!);
-                break;
-        }
-    }
-
-    if (isHost) {
-      handler();
+    if (currentIsHost) {
+      // Host executes the action directly
+      await handlePlayerAction({ payload: action });
     } else {
-      channelRef.current?.send({
+      // Other players broadcast the action to the host
+      await channelRef.current?.send({
         type: 'broadcast',
         event: 'player_action',
         payload: action,
       });
     }
-  };
-
+  }, [handlePlayerAction]); // Depends on the stable handlePlayerAction
 
   return (
     <GameContext.Provider value={{ gameState, isHost, sendPlayerAction, dispatch }}>

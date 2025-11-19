@@ -8,6 +8,9 @@ const EndPage: React.FC = () => {
   const { gameState, dispatch } = useContext(GameContext);
 
   const handleReturnHome = async () => {
+    if (gameState.roomId) {
+      await gameService.leaveRoom(gameState.roomId);
+    }
     await gameService.leaveGame();
     dispatch({ type: 'LEAVE_GAME' });
   };
