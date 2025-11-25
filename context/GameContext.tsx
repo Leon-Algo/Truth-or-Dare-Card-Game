@@ -1,3 +1,4 @@
+
 import React, { createContext, useReducer, useEffect, ReactNode, useRef, useCallback } from 'react';
 import { Room, GameAction } from '../types';
 import { supabase } from '../lib/supabase';
@@ -105,7 +106,14 @@ export const gameService = {
     },
     getRoom: async (roomId: string): Promise<Room | null> => {
         const { data, error } = await supabase.from('rooms').select('state').eq('room_id', roomId).single();
-        if (error || !data) return null;
+        if (error) {
+            console.error("Supabase Error fetching room:", error);
+            return null;
+        }
+        if (!data) {
+            console.warn(`Room ${roomId} not found in database.`);
+            return null;
+        }
         return data.state as Room;
     },
     joinRoom: async (roomId: string): Promise<Room | null> => {
