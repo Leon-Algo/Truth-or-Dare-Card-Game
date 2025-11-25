@@ -10,11 +10,12 @@ const supabaseAnonKey = 'sb_publishable_EvEX2Hlp9e7SU4FcbpIrzQ_uusY6M87';
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 /*
-  !!! IMPORTANT: DATABASE INITIALIZATION REQUIRED !!!
+  !!! IMPORTANT: DATABASE INITIALIZATION REQUIRED (UPDATED) !!!
 
-  You MUST run the following SQL in your Supabase SQL Editor to create the 
-  tables and backend logic functions. I have corrected the SQL syntax 
-  from previous versions to ensure it runs smoothly.
+  If you saw the error "relation 'rooms' is already member of publication...", 
+  it means part of the setup is already done, but the functions might be missing.
+  
+  Run this NEW script below. It is safe to run multiple times.
 
   1. Go to https://supabase.com/dashboard/project/wiafjgjfdrajlxnlkray/sql
   2. Create a NEW query.
@@ -29,13 +30,26 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
     updated_at TIMESTAMPTZ DEFAULT now() NOT NULL
   );
 
-  -- 2. Enable real-time updates on the table
-  ALTER PUBLICATION supabase_realtime ADD TABLE rooms;
+  -- 2. Enable real-time updates (SAFE MODE)
+  -- This block checks if 'rooms' is already in the publication to avoid errors.
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1
+      FROM pg_publication_tables
+      WHERE pubname = 'supabase_realtime'
+      AND schemaname = 'public'
+      AND tablename = 'rooms'
+    ) THEN
+      ALTER PUBLICATION supabase_realtime ADD TABLE rooms;
+    END IF;
+  END
+  $$;
 
   -- 3. Set up Row Level Security (RLS)
   ALTER TABLE rooms ENABLE ROW LEVEL SECURITY;
 
-  -- 4. Create Policies (Public access for this demo game)
+  -- 4. Create Policies
   DROP POLICY IF EXISTS "Public access for rooms" ON rooms;
   CREATE POLICY "Public access for rooms"
     ON rooms FOR ALL
@@ -43,7 +57,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
     WITH CHECK ( true );
 
   -- 5. Create Atomic Functions (Backend Logic)
-  -- These functions use strict JSONB casting to prevent SQL errors.
+  -- These use CREATE OR REPLACE, so they will update existing functions safely.
 
   -- Function: Join Room
   CREATE OR REPLACE FUNCTION join_room(p_room_id TEXT)
@@ -122,7 +136,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
       question_index := floor(random() * jsonb_array_length(questions_array));
       question_to_draw := questions_array->question_index;
       
-      -- Remove from questions (using COALESCE to handle empty array result safely)
+      -- Remove from questions
       current_state := jsonb_set(
         current_state,
         '{questions}',

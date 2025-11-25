@@ -82,13 +82,28 @@ const generateId = (length: number): string => {
     return result;
 }
 
+const handleSupabaseError = (error: any) => {
+    // 42P01 is the Postgres code for "undefined_table"
+    if (error.code === '42P01') {
+        console.error("CRITICAL: Database tables not found.");
+        alert("严重错误：数据库未初始化。\n\n请登录 Supabase 后台 SQL Editor 运行建表脚本！(请查看代码注释或聊天记录)");
+    }
+    throw error;
+}
+
 export const gameService = {
     createRoom: async (): Promise<Room> => {
         let newRoomId = '';
         let roomExists = true;
         while (roomExists) {
             newRoomId = generateId(4);
-            const { data } = await supabase.from('rooms').select('room_id').eq('room_id', newRoomId).single();
+            // Check if room ID collision
+            const { data, error } = await supabase.from('rooms').select('room_id').eq('room_id', newRoomId).maybeSingle();
+            
+            if (error) {
+                // If the table doesn't exist, this will throw 42P01
+                handleSupabaseError(error);
+            }
             if (!data) roomExists = false;
         }
         
@@ -100,25 +115,25 @@ export const gameService = {
         };
 
         const { error } = await supabase.from('rooms').insert({ room_id: newRoomId, state: newRoomData });
-        if (error) throw error;
+        if (error) handleSupabaseError(error);
 
         return newRoomData as Room;
     },
     getRoom: async (roomId: string): Promise<Room | null> => {
         const { data, error } = await supabase.from('rooms').select('state').eq('room_id', roomId).single();
         if (error) {
-            console.error("Supabase Error fetching room:", error);
-            return null;
-        }
-        if (!data) {
-            console.warn(`Room ${roomId} not found in database.`);
-            return null;
+             if (error.code === 'PGRST116') {
+                 // The result contains 0 rows (Room not found), this is normal logic
+                 return null;
+             }
+             handleSupabaseError(error);
+             return null;
         }
         return data.state as Room;
     },
     joinRoom: async (roomId: string): Promise<Room | null> => {
         const { data, error } = await supabase.rpc('join_room', { p_room_id: roomId });
-        if (error) throw error;
+        if (error) handleSupabaseError(error);
         return data as Room;
     },
     leaveRoom: async (roomId: string): Promise<void> => {
@@ -127,15 +142,15 @@ export const gameService = {
     },
     submitQuestion: async (roomId: string, question: string): Promise<void> => {
         const { error } = await supabase.rpc('submit_question', { p_room_id: roomId, p_question: question });
-        if (error) throw error;
+        if (error) handleSupabaseError(error);
     },
     startGame: async (roomId: string): Promise<void> => {
         const { error } = await supabase.rpc('start_game', { p_room_id: roomId });
-        if (error) throw error;
+        if (error) handleSupabaseError(error);
     },
     drawQuestion: async (roomId: string): Promise<void> => {
         const { error } = await supabase.rpc('draw_question', { p_room_id: roomId });
-        if (error) throw error;
+        if (error) handleSupabaseError(error);
     },
     leaveGame: async (): Promise<void> => {
       try {
@@ -231,6 +246,10 @@ export const GameProvider: React.FC<{children: ReactNode}> = ({ children }) => {
         }
     );
     
+    // Listen for broadcast events (player actions). 
+    // The handler checks if we are the host before acting.
+    channel.on('broadcast', { event: 'player_action' }, handlePlayerAction);
+    
     if(channel.state !== 'joined') {
         channel.subscribe((status, err) => {
             if (status === 'CHANNEL_ERROR') console.error('Real-time channel error:', err);
@@ -243,21 +262,7 @@ export const GameProvider: React.FC<{children: ReactNode}> = ({ children }) => {
             channelRef.current = null;
         }
     };
-  }, [gameState.roomId]);
-
-  // Effect 2: Manages the host-specific broadcast listener based ONLY on isHost
-  useEffect(() => {
-    const channel = channelRef.current;
-    if (channel && isHost) {
-        // Add listener if user is host
-        channel.on('broadcast', { event: 'player_action' }, handlePlayerAction);
-
-        return () => {
-            // Important: remove the specific listener on cleanup to prevent leaks
-            channel.off('broadcast', { event: 'player_action' });
-        };
-    }
-  }, [isHost, handlePlayerAction]);
+  }, [gameState.roomId, handlePlayerAction]);
 
   const sendPlayerAction = useCallback(async (action: { type: string; payload?: any }) => {
     const currentIsHost = isHostRef.current;
