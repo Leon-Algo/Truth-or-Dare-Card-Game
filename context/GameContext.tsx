@@ -26,7 +26,7 @@ const gameReducer = (state: LocalGameState, action: GameAction): LocalGameState 
         ...initialState,
         roomId: action.payload.roomId,
         hostId: action.payload.hostId,
-        clientId: action.payload.hostId, // The creator is the host
+        clientId: action.payload.hostId,
         playerCount: 1,
         questions: [],
         usedQuestions: [],
@@ -37,8 +37,9 @@ const gameReducer = (state: LocalGameState, action: GameAction): LocalGameState 
     case 'SET_CLIENT_ID':
         return { ...state, clientId: action.payload.clientId };
     case 'SUBMIT_QUESTION':
-      // Optimistic update for responsiveness
-      return { ...state, questions: [...state.questions, action.payload] };
+      // We rely on the server update now, so this is just for local immediate feedback if needed, 
+      // but strictly we should wait for UPDATE_STATE. Kept for optimistic UI if desired.
+      return state; 
     case 'UPDATE_STATE':
         return {...state, ...action.payload };
     case 'START_GAME':
@@ -53,7 +54,6 @@ const gameReducer = (state: LocalGameState, action: GameAction): LocalGameState 
     case 'END_GAME':
         return { ...state, status: 'ended' };
     case 'LEAVE_GAME':
-        // Keep clientId but reset the rest
         return { ...initialState, clientId: state.clientId };
     default:
       return state;
@@ -63,12 +63,12 @@ const gameReducer = (state: LocalGameState, action: GameAction): LocalGameState 
 export const GameContext = createContext<{
   gameState: LocalGameState;
   isHost: boolean;
-  sendPlayerAction: (action: { type: string; payload?: any }) => void;
+  sendPlayerAction: (action: { type: string; payload?: any }) => Promise<void>;
   dispatch: React.Dispatch<GameAction>;
 }>({
   gameState: initialState,
   isHost: false,
-  sendPlayerAction: () => null,
+  sendPlayerAction: async () => {},
   dispatch: () => null,
 });
 
@@ -83,10 +83,9 @@ const generateId = (length: number): string => {
 }
 
 const handleSupabaseError = (error: any) => {
-    // 42P01 is the Postgres code for "undefined_table"
     if (error.code === '42P01') {
         console.error("CRITICAL: Database tables not found.");
-        alert("严重错误：数据库未初始化。\n\n请登录 Supabase 后台 SQL Editor 运行建表脚本！(请查看代码注释或聊天记录)");
+        alert("严重错误：数据库未初始化。\n\n请登录 Supabase 后台 SQL Editor 运行建表脚本！");
     }
     throw error;
 }
@@ -97,13 +96,9 @@ export const gameService = {
         let roomExists = true;
         while (roomExists) {
             newRoomId = generateId(4);
-            // Check if room ID collision
             const { data, error } = await supabase.from('rooms').select('room_id').eq('room_id', newRoomId).maybeSingle();
             
-            if (error) {
-                // If the table doesn't exist, this will throw 42P01
-                handleSupabaseError(error);
-            }
+            if (error) handleSupabaseError(error);
             if (!data) roomExists = false;
         }
         
@@ -122,10 +117,7 @@ export const gameService = {
     getRoom: async (roomId: string): Promise<Room | null> => {
         const { data, error } = await supabase.from('rooms').select('state').eq('room_id', roomId).single();
         if (error) {
-             if (error.code === 'PGRST116') {
-                 // The result contains 0 rows (Room not found), this is normal logic
-                 return null;
-             }
+             if (error.code === 'PGRST116') return null;
              handleSupabaseError(error);
              return null;
         }
@@ -166,19 +158,13 @@ export const GameProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   const channelRef = useRef<RealtimeChannel | null>(null);
 
   const isHost = gameState.hostId !== null && gameState.clientId === gameState.hostId;
-
-  // Use refs to get the latest state in stable callbacks without re-triggering effects.
   const gameStateRef = useRef(gameState);
+
   useEffect(() => {
     gameStateRef.current = gameState;
   }, [gameState]);
 
-  const isHostRef = useRef(isHost);
-  useEffect(() => {
-    isHostRef.current = isHost;
-  }, [isHost]);
-
-  // Rejoin session from localStorage
+  // Session recovery
   useEffect(() => {
     const rejoinSession = async () => {
         try {
@@ -197,32 +183,35 @@ export const GameProvider: React.FC<{children: ReactNode}> = ({ children }) => {
             }
         } catch (e) {
             console.error("Failed to rejoin session", e);
-            localStorage.removeItem('truth-game-session');
         }
     };
     rejoinSession();
   }, []);
 
-  const handlePlayerAction = useCallback(async ({ payload }: { payload: { type: string; payload?: any } }) => {
-    const currentIsHost = isHostRef.current;
+  // Direct Action Handler - Everyone calls the API directly
+  const sendPlayerAction = useCallback(async (action: { type: string; payload?: any }) => {
     const currentGameState = gameStateRef.current;
-
-    if (!currentIsHost || !currentGameState.roomId) return;
+    if (!currentGameState.roomId) return;
     
-    switch (payload.type) {
-      case 'SUBMIT_QUESTION':
-        await gameService.submitQuestion(currentGameState.roomId, payload.payload);
-        break;
-      case 'START_GAME':
-        await gameService.startGame(currentGameState.roomId);
-        break;
-      case 'DRAW_QUESTION':
-        await gameService.drawQuestion(currentGameState.roomId);
-        break;
+    try {
+        switch (action.type) {
+          case 'SUBMIT_QUESTION':
+            await gameService.submitQuestion(currentGameState.roomId, action.payload);
+            break;
+          case 'START_GAME':
+            await gameService.startGame(currentGameState.roomId);
+            break;
+          case 'DRAW_QUESTION':
+            await gameService.drawQuestion(currentGameState.roomId);
+            break;
+        }
+    } catch (e) {
+        console.error("Action failed:", e);
+        alert("Action failed. Please check your connection.");
     }
-  }, []); // Empty dependency array ensures this function reference is stable
+  }, []);
 
-  // Effect 1: Manages the channel lifecycle based ONLY on roomId
+  // Real-time Subscription - Single Source of Truth
   useEffect(() => {
     if (!gameState.roomId) {
       if (channelRef.current) {
@@ -235,26 +224,22 @@ export const GameProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     const channel = supabase.channel(`room:${gameState.roomId}`);
     channelRef.current = channel;
 
-    // General listener for all players
+    // Listen to ALL updates on the 'rooms' table for this room_id
     channel.on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'rooms', filter: `room_id=eq.${gameState.roomId}` },
+        { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `room_id=eq.${gameState.roomId}` },
         (payload) => {
-            if (payload.eventType === 'UPDATE' && payload.new.state) {
-              dispatch({ type: 'UPDATE_STATE', payload: payload.new.state as Room });
+            if (payload.new && payload.new.state) {
+                // Determine if we need to transition status
+                const newState = payload.new.state as Room;
+                dispatch({ type: 'UPDATE_STATE', payload: newState });
             }
         }
     );
     
-    // Listen for broadcast events (player actions). 
-    // The handler checks if we are the host before acting.
-    channel.on('broadcast', { event: 'player_action' }, handlePlayerAction);
-    
-    if(channel.state !== 'joined') {
-        channel.subscribe((status, err) => {
-            if (status === 'CHANNEL_ERROR') console.error('Real-time channel error:', err);
-        });
-    }
+    channel.subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR') console.error('Real-time channel error:', err);
+    });
 
     return () => {
         if (channelRef.current) {
@@ -262,26 +247,7 @@ export const GameProvider: React.FC<{children: ReactNode}> = ({ children }) => {
             channelRef.current = null;
         }
     };
-  }, [gameState.roomId, handlePlayerAction]);
-
-  const sendPlayerAction = useCallback(async (action: { type: string; payload?: any }) => {
-    const currentIsHost = isHostRef.current;
-    const currentGameState = gameStateRef.current;
-
-    if (!currentGameState.roomId) return;
-    
-    if (currentIsHost) {
-      // Host executes the action directly
-      await handlePlayerAction({ payload: action });
-    } else {
-      // Other players broadcast the action to the host
-      await channelRef.current?.send({
-        type: 'broadcast',
-        event: 'player_action',
-        payload: action,
-      });
-    }
-  }, [handlePlayerAction]); // Depends on the stable handlePlayerAction
+  }, [gameState.roomId]);
 
   return (
     <GameContext.Provider value={{ gameState, isHost, sendPlayerAction, dispatch }}>
