@@ -37,11 +37,18 @@ const gameReducer = (state: LocalGameState, action: GameAction): LocalGameState 
     case 'SET_CLIENT_ID':
         return { ...state, clientId: action.payload.clientId };
     case 'SUBMIT_QUESTION':
-      // We rely on the server update now, so this is just for local immediate feedback if needed, 
-      // but strictly we should wait for UPDATE_STATE. Kept for optimistic UI if desired.
       return state; 
     case 'UPDATE_STATE':
-        return {...state, ...action.payload };
+        // Deep merge for critical arrays to ensure React detects changes
+        return {
+            ...state,
+            ...action.payload,
+            questions: action.payload.questions || state.questions,
+            usedQuestions: action.payload.usedQuestions || state.usedQuestions,
+            // Ensure status transition is caught
+            status: action.payload.status || state.status,
+            playerCount: action.payload.playerCount ?? state.playerCount
+        };
     case 'START_GAME':
       return { ...state, status: 'playing' };
     case 'DRAW_QUESTION':
@@ -87,7 +94,7 @@ const handleSupabaseError = (error: any) => {
         console.error("CRITICAL: Database tables not found.");
         alert("严重错误：数据库未初始化。\n\n请登录 Supabase 后台 SQL Editor 运行建表脚本！");
     }
-    throw error;
+    console.error("Supabase Error:", error);
 }
 
 export const gameService = {
@@ -129,6 +136,7 @@ export const gameService = {
         return data as Room;
     },
     leaveRoom: async (roomId: string): Promise<void> => {
+        if (!roomId) return;
         const { error } = await supabase.rpc('leave_room', { p_room_id: roomId });
         if (error) console.error("Failed to leave room:", error);
     },
@@ -164,6 +172,24 @@ export const GameProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     gameStateRef.current = gameState;
   }, [gameState]);
 
+  // Handle Tab Close / Refresh - Gracefully leave room
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+        const currentRoomId = gameStateRef.current.roomId;
+        if (currentRoomId) {
+            // We use the raw Supabase client logic here or existing service
+            // navigator.sendBeacon is ideal but RPC needs auth/headers. 
+            // We'll try to fire the async call. Browsers often allow this small fetch.
+            gameService.leaveRoom(currentRoomId);
+        }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+        window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, []);
+
   // Session recovery
   useEffect(() => {
     const rejoinSession = async () => {
@@ -188,7 +214,7 @@ export const GameProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     rejoinSession();
   }, []);
 
-  // Direct Action Handler - Everyone calls the API directly
+  // Direct Action Handler
   const sendPlayerAction = useCallback(async (action: { type: string; payload?: any }) => {
     const currentGameState = gameStateRef.current;
     if (!currentGameState.roomId) return;
@@ -207,11 +233,10 @@ export const GameProvider: React.FC<{children: ReactNode}> = ({ children }) => {
         }
     } catch (e) {
         console.error("Action failed:", e);
-        alert("Action failed. Please check your connection.");
     }
   }, []);
 
-  // Real-time Subscription - Single Source of Truth
+  // Real-time Subscription
   useEffect(() => {
     if (!gameState.roomId) {
       if (channelRef.current) {
@@ -224,13 +249,11 @@ export const GameProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     const channel = supabase.channel(`room:${gameState.roomId}`);
     channelRef.current = channel;
 
-    // Listen to ALL updates on the 'rooms' table for this room_id
     channel.on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `room_id=eq.${gameState.roomId}` },
         (payload) => {
             if (payload.new && payload.new.state) {
-                // Determine if we need to transition status
                 const newState = payload.new.state as Room;
                 dispatch({ type: 'UPDATE_STATE', payload: newState });
             }

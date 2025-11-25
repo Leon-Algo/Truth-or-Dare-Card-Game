@@ -1,8 +1,8 @@
 
 import React, { useState, useContext, useEffect } from 'react';
 import { GameContext } from '../context/GameContext';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Sparkles, RefreshCw } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { Sparkles, RefreshCw, HelpCircle } from 'lucide-react';
 
 interface QuestionCardProps { 
     question: string | null; 
@@ -12,109 +12,135 @@ interface QuestionCardProps {
 }
 
 const QuestionCard: React.FC<QuestionCardProps> = ({ question, onNext, hasQuestions, totalLeft }) => {
-    // isFlipped = true means showing BACK of card. false means showing FRONT (Question).
-    // Initial state: If there is a question, show front. If not, show back.
-    const [isFlipped, setIsFlipped] = useState(!question);
+    // STATE LOGIC:
+    // isShowingQuestion = true  -> We are looking at the TEXT (Front)
+    // isShowingQuestion = false -> We are looking at the PATTERN (Back)
+    
+    // Initial state: If we have a question, show it. Otherwise show pattern.
+    const [isShowingQuestion, setIsShowingQuestion] = useState(!!question);
     const [isAnimating, setIsAnimating] = useState(false);
 
-    // Watch for question changes from the server. 
-    // If the question changes, it means a draw happened. We should flip to show it.
+    // Effect: When server sends a new question, reveal it automatically
     useEffect(() => {
         if (question) {
-            // New question arrived. 
-            // If we are already showing the front (isFlipped=false), this might be a subtle transition.
-            // But usually, we are "waiting" (isFlipped=true) when the new question arrives.
-            setIsFlipped(false);
-            setIsAnimating(false);
+            // Slight delay to allow the "draw" animation to feel processed
+            const timer = setTimeout(() => {
+                setIsShowingQuestion(true); // Flip to show question
+                setIsAnimating(false);      // Unlock clicks
+            }, 200);
+            return () => clearTimeout(timer);
         } else {
-            // No question active (start of game or reset). Show back.
-            setIsFlipped(true);
+            // No question (maybe reset or end), show pattern
+            setIsShowingQuestion(false);
         }
     }, [question]);
 
     const handleCardClick = () => {
         if (!hasQuestions || isAnimating) return;
         
-        // Interaction Logic:
-        // 1. If currently showing Front (Question), click means "Next".
-        //    Action: Flip to Back -> Trigger API Draw.
-        // 2. If currently showing Back, click means "Draw" (if we aren't already waiting).
-        //    Action: Trigger API Draw.
-        
         setIsAnimating(true);
         
-        if (!isFlipped) {
-            // Currently showing question. Flip over first.
-            setIsFlipped(true);
-            // Wait for flip animation to finish (approx 500ms) before asking server
+        if (isShowingQuestion) {
+            // 1. Currently reading a question. User wants next.
+            // Action: Flip to Pattern FIRST.
+            setIsShowingQuestion(false);
+            
+            // 2. Wait for flip to finish (approx 600ms), THEN ask server for new card
             setTimeout(() => {
-                onNext();
+                onNext(); 
+                // The useEffect above will handle the reveal when data arrives
             }, 600);
         } else {
-            // Currently showing back. Just draw.
+            // 1. Currently looking at Pattern. User wants to draw.
+            // Action: Just ask server.
             onNext();
         }
     };
     
-    const cardVariants = {
-        front: { rotateY: 0, transition: { type: "spring", stiffness: 50, damping: 12 } },
-        back: { rotateY: 180, transition: { type: "spring", stiffness: 50, damping: 12 } },
+    // CSS 3D TRANSFORM EXPLANATION:
+    // Container rotates. 
+    // - 0deg: Shows the "Front" of the container. We map the PATTERN to this side.
+    // - 180deg: Shows the "Back" of the container. We map the QUESTION to this side.
+    // Why? It feels like "opening" the card.
+    
+    const variants = {
+        patternSide: { rotateY: 0, transition: { type: "spring", stiffness: 40, damping: 10 } },
+        questionSide: { rotateY: 180, transition: { type: "spring", stiffness: 40, damping: 10 } }
     };
 
     return (
-        <div className="perspective-1000 w-full max-w-sm mx-auto h-80 relative group">
-             {/* Glow effect behind card */}
-             <div className={`absolute inset-0 bg-brand-primary blur-3xl opacity-20 transition-opacity duration-500 ${isFlipped ? 'scale-90' : 'scale-105'}`}></div>
+        <div className="perspective-1000 w-full max-w-sm mx-auto h-96 relative group select-none">
+             {/* Dynamic Glow */}
+             <div className={`absolute inset-0 bg-brand-primary blur-3xl transition-all duration-700 
+                ${isShowingQuestion ? 'opacity-20 scale-105' : 'opacity-10 scale-95'}`}>
+             </div>
 
             <motion.div
                 className="relative w-full h-full cursor-pointer preserve-3d"
                 initial={false}
-                animate={isFlipped ? "back" : "front"}
-                variants={cardVariants}
+                animate={isShowingQuestion ? "questionSide" : "patternSide"}
+                variants={variants}
                 onClick={handleCardClick}
                 style={{ transformStyle: 'preserve-3d' }}
             >
-                {/* --- Card FRONT (The Question) --- */}
-                {/* Note: In CSS rotateY(0) is front. */}
-                <div className="absolute inset-0 bg-white rounded-2xl shadow-2xl flex flex-col items-center justify-center p-8 backface-hidden border-2 border-gray-100">
-                    <div className="w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center mb-6">
-                        <Sparkles className="text-brand-primary" size={24} />
-                    </div>
-                    <p className="text-xl md:text-2xl text-center font-bold text-dark leading-relaxed">
-                        {question || "..."}
-                    </p>
-                    <p className="absolute bottom-6 text-xs text-gray-400 font-medium">点击抽取下一题</p>
-                </div>
-
-                {/* --- Card BACK (The Deck Pattern) --- */}
-                {/* Note: rotateY(180) makes this visible when flipped. */}
+                {/* --- FACE 1: PATTERN (Visible at 0deg) --- */}
+                {/* We treat this as the 'front' of the DOM element, but conceptually the 'back' of a playing card */}
                 <div 
-                    className="absolute inset-0 rounded-2xl shadow-2xl flex flex-col items-center justify-center p-6 backface-hidden overflow-hidden"
+                    className="absolute inset-0 rounded-3xl shadow-2xl flex flex-col items-center justify-center p-6 backface-hidden overflow-hidden border-4 border-white/10"
                     style={{ 
-                        transform: 'rotateY(180deg)',
-                        background: 'linear-gradient(135deg, #6D28D9 0%, #4C1D95 100%)',
+                        background: 'linear-gradient(135deg, #4C1D95 0%, #6D28D9 50%, #8B5CF6 100%)',
+                        backfaceVisibility: 'hidden',
+                        WebkitBackfaceVisibility: 'hidden'
                     }}
                 >
-                    {/* Decorative pattern */}
-                    <div className="absolute inset-0 opacity-10" style={{ 
-                        backgroundImage: 'radial-gradient(#fff 1px, transparent 1px)', 
-                        backgroundSize: '20px 20px' 
-                    }}></div>
-                    
-                    <div className="w-20 h-20 rounded-full border-4 border-white/20 flex items-center justify-center mb-4 backdrop-blur-sm">
+                     {/* Decorative pattern overlay */}
+                    <div className="absolute inset-0 opacity-20" 
+                        style={{ backgroundImage: 'radial-gradient(circle, #fff 1px, transparent 1px)', backgroundSize: '24px 24px' }}>
+                    </div>
+
+                    <div className="w-24 h-24 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center mb-6 shadow-inner ring-1 ring-white/30">
                         {isAnimating ? (
-                            <RefreshCw className="text-white animate-spin" size={32} />
+                            <RefreshCw className="text-white/80 animate-spin" size={40} />
                         ) : (
-                            <span className="text-3xl font-black text-white">?</span>
+                            <HelpCircle className="text-white/80" size={48} />
                         )}
                     </div>
                     
-                    <h2 className="text-2xl font-bold text-white tracking-widest relative z-10">
-                        {hasQuestions ? (isAnimating ? '洗牌中...' : '点击抽卡') : '游戏结束'}
+                    <h2 className="text-3xl font-black text-white tracking-widest relative z-10 drop-shadow-md">
+                        {hasQuestions ? (isAnimating ? 'DRAWING...' : 'TAP TO DRAW') : 'EMPTY'}
                     </h2>
                     
-                    <div className="absolute bottom-6 px-4 py-1 bg-black/20 rounded-full text-white/80 text-xs font-medium backdrop-blur-md border border-white/10">
-                        剩余 {totalLeft} 题
+                    <div className="absolute bottom-8 px-5 py-2 bg-black/30 rounded-full text-white/90 text-sm font-bold backdrop-blur-md border border-white/10">
+                        {totalLeft} CARDS LEFT
+                    </div>
+                </div>
+
+                {/* --- FACE 2: QUESTION (Visible at 180deg) --- */}
+                {/* Pre-rotated 180deg so it matches the container when the container is flipped 180deg */}
+                <div 
+                    className="absolute inset-0 bg-white rounded-3xl shadow-2xl flex flex-col items-center justify-center p-8 backface-hidden border border-gray-100"
+                    style={{ 
+                        transform: 'rotateY(180deg)',
+                        backfaceVisibility: 'hidden',
+                        WebkitBackfaceVisibility: 'hidden'
+                    }}
+                >
+                    <div className="absolute top-0 left-0 w-full h-2 bg-brand-primary"></div>
+                    
+                    <div className="w-14 h-14 bg-brand-primary/10 rounded-2xl flex items-center justify-center mb-6 text-brand-primary rotate-3">
+                        <Sparkles size={28} />
+                    </div>
+                    
+                    <div className="flex-grow flex items-center justify-center w-full">
+                        <p className="text-2xl md:text-3xl text-center font-extrabold text-brand-dark leading-tight">
+                            {question || "..."}
+                        </p>
+                    </div>
+                    
+                    <div className="w-full pt-6 border-t border-gray-100 mt-4">
+                        <p className="text-center text-xs text-brand-primary/60 font-bold uppercase tracking-widest">
+                            Tap to Flip & Draw
+                        </p>
                     </div>
                 </div>
             </motion.div>
@@ -129,16 +155,19 @@ const GamePage: React.FC = () => {
         sendPlayerAction({ type: 'DRAW_QUESTION' });
     };
     
-    // total questions available to be drawn
     const remainingCount = gameState.questions.length;
 
     return (
-        <div className="w-full flex flex-col items-center">
-            <div className="mb-8 text-center">
-                <span className="px-3 py-1 bg-brand-light/10 text-brand-primary text-xs font-bold rounded-full uppercase tracking-wider">
+        <div className="w-full flex flex-col items-center max-w-md mx-auto">
+            <motion.div 
+                initial={{ opacity: 0, y: -20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mb-10 text-center"
+            >
+                <span className="px-4 py-1.5 bg-brand-primary text-white text-xs font-bold rounded-full uppercase tracking-wider shadow-lg shadow-brand-primary/30">
                     Game In Progress
                 </span>
-            </div>
+            </motion.div>
             
             <QuestionCard 
                 question={gameState.currentQuestion}
@@ -147,9 +176,16 @@ const GamePage: React.FC = () => {
                 totalLeft={remainingCount}
             />
             
-            <div className="mt-12 text-center text-gray-400 text-sm">
-                <p>{gameState.usedQuestions.length} 轮已过</p>
-            </div>
+            <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.5 }}
+                className="mt-12 text-center"
+            >
+                <p className="text-sm font-medium text-gray-400">
+                    Round {gameState.usedQuestions.length + (gameState.currentQuestion ? 1 : 0)}
+                </p>
+            </motion.div>
         </div>
     );
 };
