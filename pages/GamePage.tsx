@@ -13,24 +13,21 @@ interface QuestionCardProps {
 
 const QuestionCard: React.FC<QuestionCardProps> = ({ question, onNext, hasQuestions, totalLeft }) => {
     // STATE LOGIC:
-    // isShowingQuestion = true  -> We are looking at the TEXT (Front)
-    // isShowingQuestion = false -> We are looking at the PATTERN (Back)
+    // isShowingQuestion = true  -> 显示文字 (正面)
+    // isShowingQuestion = false -> 显示花纹 (背面)
     
-    // Initial state: If we have a question, show it. Otherwise show pattern.
     const [isShowingQuestion, setIsShowingQuestion] = useState(!!question);
     const [isAnimating, setIsAnimating] = useState(false);
 
-    // Effect: When server sends a new question, reveal it automatically
+    // 当服务端传来新问题时，自动翻开
     useEffect(() => {
         if (question) {
-            // Slight delay to allow the "draw" animation to feel processed
             const timer = setTimeout(() => {
-                setIsShowingQuestion(true); // Flip to show question
-                setIsAnimating(false);      // Unlock clicks
+                setIsShowingQuestion(true); // 翻开显示问题
+                setIsAnimating(false);      // 解锁点击
             }, 200);
             return () => clearTimeout(timer);
         } else {
-            // No question (maybe reset or end), show pattern
             setIsShowingQuestion(false);
         }
     }, [question]);
@@ -41,27 +38,20 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ question, onNext, hasQuesti
         setIsAnimating(true);
         
         if (isShowingQuestion) {
-            // 1. Currently reading a question. User wants next.
-            // Action: Flip to Pattern FIRST.
+            // 1. 当前是看问题状态，用户想看下一个
+            // 动作：先盖上卡牌
             setIsShowingQuestion(false);
             
-            // 2. Wait for flip to finish (approx 600ms), THEN ask server for new card
+            // 2. 等待翻转动画结束 (约 600ms)，然后请求新数据
             setTimeout(() => {
                 onNext(); 
-                // The useEffect above will handle the reveal when data arrives
             }, 600);
         } else {
-            // 1. Currently looking at Pattern. User wants to draw.
-            // Action: Just ask server.
+            // 1. 当前是背面，用户想抽卡
+            // 动作：直接请求
             onNext();
         }
     };
-    
-    // CSS 3D TRANSFORM EXPLANATION:
-    // Container rotates. 
-    // - 0deg: Shows the "Front" of the container. We map the PATTERN to this side.
-    // - 180deg: Shows the "Back" of the container. We map the QUESTION to this side.
-    // Why? It feels like "opening" the card.
     
     const variants = {
         patternSide: { rotateY: 0, transition: { type: "spring", stiffness: 40, damping: 10 } },
@@ -83,8 +73,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ question, onNext, hasQuesti
                 onClick={handleCardClick}
                 style={{ transformStyle: 'preserve-3d' }}
             >
-                {/* --- FACE 1: PATTERN (Visible at 0deg) --- */}
-                {/* We treat this as the 'front' of the DOM element, but conceptually the 'back' of a playing card */}
+                {/* --- 面 1: 花纹 (0deg) --- */}
                 <div 
                     className="absolute inset-0 rounded-3xl shadow-2xl flex flex-col items-center justify-center p-6 backface-hidden overflow-hidden border-4 border-white/10"
                     style={{ 
@@ -93,7 +82,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ question, onNext, hasQuesti
                         WebkitBackfaceVisibility: 'hidden'
                     }}
                 >
-                     {/* Decorative pattern overlay */}
+                     {/* 装饰纹理 */}
                     <div className="absolute inset-0 opacity-20" 
                         style={{ backgroundImage: 'radial-gradient(circle, #fff 1px, transparent 1px)', backgroundSize: '24px 24px' }}>
                     </div>
@@ -107,16 +96,15 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ question, onNext, hasQuesti
                     </div>
                     
                     <h2 className="text-3xl font-black text-white tracking-widest relative z-10 drop-shadow-md">
-                        {hasQuestions ? (isAnimating ? 'DRAWING...' : 'TAP TO DRAW') : 'EMPTY'}
+                        {hasQuestions ? (isAnimating ? '抽取中...' : '点击抽取') : '已抽完'}
                     </h2>
                     
                     <div className="absolute bottom-8 px-5 py-2 bg-black/30 rounded-full text-white/90 text-sm font-bold backdrop-blur-md border border-white/10">
-                        {totalLeft} CARDS LEFT
+                        剩余 {totalLeft} 张
                     </div>
                 </div>
 
-                {/* --- FACE 2: QUESTION (Visible at 180deg) --- */}
-                {/* Pre-rotated 180deg so it matches the container when the container is flipped 180deg */}
+                {/* --- 面 2: 问题 (180deg) --- */}
                 <div 
                     className="absolute inset-0 bg-white rounded-3xl shadow-2xl flex flex-col items-center justify-center p-8 backface-hidden border border-gray-100"
                     style={{ 
@@ -139,7 +127,7 @@ const QuestionCard: React.FC<QuestionCardProps> = ({ question, onNext, hasQuesti
                     
                     <div className="w-full pt-6 border-t border-gray-100 mt-4">
                         <p className="text-center text-xs text-brand-primary/60 font-bold uppercase tracking-widest">
-                            Tap to Flip & Draw
+                            点击翻转 & 抽取下一张
                         </p>
                     </div>
                 </div>
@@ -165,7 +153,7 @@ const GamePage: React.FC = () => {
                 className="mb-10 text-center"
             >
                 <span className="px-4 py-1.5 bg-brand-primary text-white text-xs font-bold rounded-full uppercase tracking-wider shadow-lg shadow-brand-primary/30">
-                    Game In Progress
+                    游戏进行中
                 </span>
             </motion.div>
             
@@ -183,7 +171,7 @@ const GamePage: React.FC = () => {
                 className="mt-12 text-center"
             >
                 <p className="text-sm font-medium text-gray-400">
-                    Round {gameState.usedQuestions.length + (gameState.currentQuestion ? 1 : 0)}
+                    第 {gameState.usedQuestions.length + (gameState.currentQuestion ? 1 : 0)} 轮
                 </p>
             </motion.div>
         </div>

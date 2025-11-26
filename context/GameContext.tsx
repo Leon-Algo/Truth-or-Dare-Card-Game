@@ -39,13 +39,11 @@ const gameReducer = (state: LocalGameState, action: GameAction): LocalGameState 
     case 'SUBMIT_QUESTION':
       return state; 
     case 'UPDATE_STATE':
-        // Deep merge for critical arrays to ensure React detects changes
         return {
             ...state,
             ...action.payload,
             questions: action.payload.questions || state.questions,
             usedQuestions: action.payload.usedQuestions || state.usedQuestions,
-            // Ensure status transition is caught
             status: action.payload.status || state.status,
             playerCount: action.payload.playerCount ?? state.playerCount
         };
@@ -164,7 +162,6 @@ export const gameService = {
 export const GameProvider: React.FC<{children: ReactNode}> = ({ children }) => {
   const [gameState, dispatch] = useReducer(gameReducer, initialState);
   const channelRef = useRef<RealtimeChannel | null>(null);
-
   const isHost = gameState.hostId !== null && gameState.clientId === gameState.hostId;
   const gameStateRef = useRef(gameState);
 
@@ -177,9 +174,7 @@ export const GameProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     const handleBeforeUnload = () => {
         const currentRoomId = gameStateRef.current.roomId;
         if (currentRoomId) {
-            // We use the raw Supabase client logic here or existing service
-            // navigator.sendBeacon is ideal but RPC needs auth/headers. 
-            // We'll try to fire the async call. Browsers often allow this small fetch.
+            // KeepAlive request to decrement player count on server
             gameService.leaveRoom(currentRoomId);
         }
     };
@@ -190,7 +185,7 @@ export const GameProvider: React.FC<{children: ReactNode}> = ({ children }) => {
     };
   }, []);
 
-  // Session recovery
+  // Session recovery logic - CRITICAL FIX
   useEffect(() => {
     const rejoinSession = async () => {
         try {
@@ -198,11 +193,17 @@ export const GameProvider: React.FC<{children: ReactNode}> = ({ children }) => {
             if (savedSession) {
                 const { roomId, clientId } = JSON.parse(savedSession);
                 if (roomId && clientId) {
-                    const roomState = await gameService.getRoom(roomId);
+                    // FIX: We must use joinRoom() instead of getRoom().
+                    // When the page refreshes, 'beforeunload' fires leaveRoom (-1 player).
+                    // When the page reloads, we must call joinRoom (+1 player) to restore the count.
+                    // If we only used getRoom, the count would remain permanently decremented.
+                    const roomState = await gameService.joinRoom(roomId);
+                    
                     if (roomState) {
                         dispatch({ type: 'JOIN_ROOM', payload: roomState });
                         dispatch({ type: 'SET_CLIENT_ID', payload: { clientId } });
                     } else {
+                        // Room no longer exists or error
                         localStorage.removeItem('truth-game-session');
                     }
                 }
